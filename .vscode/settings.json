@@ -1,0 +1,4 @@
+{
+    "terminal.integrated.stickyScroll.enabled": false,
+    "cmake.sourceDirectory": "/home/ivan/projects/zephyr_workbench/iomico_intermediate/app",
+}
