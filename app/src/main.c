@@ -7,8 +7,8 @@ LOG_MODULE_REGISTER(demo, LOG_LEVEL_DBG);
 #define STACK_SIZE 1024
 
 #define PRIO_LOW 7
-#define PRIO_MED 7
-#define PRIO_HIGH 7
+#define PRIO_MED 5
+#define PRIO_HIGH 3
 #define PRIO_COOP -1
 
 void t_coop_fn(void *p1, void *p2, void *p3){
