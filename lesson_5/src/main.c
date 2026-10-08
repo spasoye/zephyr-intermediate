@@ -3,6 +3,8 @@
 #include <zephyr/zbus/zbus.h>
 #include <zephyr/debug/thread_analyzer.h>
 #include <zephyr/task_wdt/task_wdt.h>
+#include <zephyr/logging/log_ctrl.h>
+#include <zephyr/sys/reboot.h>
 
 LOG_MODULE_REGISTER(demo, LOG_LEVEL_DBG);
 
@@ -10,6 +12,18 @@ LOG_MODULE_REGISTER(demo, LOG_LEVEL_DBG);
 #define SENSOR_COUNT       18
 #define SENSOR_PERIOD_MS  150
 #define TEMP_ALARM_MC   27000
+
+/* ===================================================================*/
+/*  logger watchdog callback                                                 */
+/* ===================================================================*/
+static void logger_wdt_cb(int channel_id, void *user_data)
+{
+    LOG_ERR("[WDT] channel=%d stuck, rebooting", channel_id);
+    LOG_PANIC();
+
+    sys_reboot(SYS_REBOOT_COLD);
+
+}
 
 /* ================================================================== */
 /*  Shared channel message                                            */
@@ -112,6 +126,7 @@ static void logger_thread_fn(void *p1, void *p2, void *p3)
 {
     ARG_UNUSED(p1); ARG_UNUSED(p2); ARG_UNUSED(p3);
 
+    int wdt_id = task_wdt_add(500, logger_wdt_cb, NULL);
     k_thread_name_set(k_current_get(), "logger");
 
     const struct zbus_channel *chan;
@@ -138,12 +153,22 @@ static void logger_thread_fn(void *p1, void *p2, void *p3)
                 msg.temperature_mc,
                 k_uptime_get_32() - msg.timestamp_ms);
 
+        /* Demonstrate stuck thread after receiving 10 messages */
+        if (received == 10) {
+            k_sleep(K_FOREVER);
+        }
+
+        task_wdt_feed(wdt_id);
+
         /*
          * Slow logger.
          * Message copies let it process old samples safely.
          */
         k_msleep(350);
     }
+
+    /* Delete the watchdog timer for this thread */
+    task_wdt_delete(wdt_id);
 
     LOG_INF("[LOGGER-MSG] done received=%d", received);
 }
