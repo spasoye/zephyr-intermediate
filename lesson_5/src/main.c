@@ -9,14 +9,17 @@
 LOG_MODULE_REGISTER(demo, LOG_LEVEL_DBG);
 
 #define STACK_SIZE       2048
-#define SENSOR_COUNT       18
+#define SENSOR_COUNT       32
 #define SENSOR_PERIOD_MS  150
 #define TEMP_ALARM_MC   27000
 
+#define HEALTH_PERIOD_MS   100
+#define QUEUE_WARN_PERCENT  75
+
 /* ===================================================================*/
-/*  logger watchdog callback                                                 */
+/*  consumer watchdog callback                                                 */
 /* ===================================================================*/
-static void logger_wdt_cb(int channel_id, void *user_data)
+static void consumer_wdt_cb(int channel_id, void *user_data)
 {
     LOG_ERR("[WDT] channel=%d stuck, rebooting", channel_id);
     LOG_PANIC();
@@ -48,13 +51,7 @@ ZBUS_LISTENER_DEFINE(display_lis, display_listener_cb);
  * Logger is a message subscriber.
  * It receives message copies, not only channel notifications.
  */
-ZBUS_MSG_SUBSCRIBER_DEFINE(logger_sub);
-
-/*
- * Alarm is a regular subscriber.
- * It receives channel notifications and then reads the latest value.
- */
-ZBUS_SUBSCRIBER_DEFINE(alarm_sub, 4);
+ZBUS_SUBSCRIBER_DEFINE(consumer_sub, 8);
 
 /* ================================================================== */
 /*  Channel                                                           */
@@ -62,7 +59,7 @@ ZBUS_SUBSCRIBER_DEFINE(alarm_sub, 4);
 
 ZBUS_CHAN_DEFINE(sensor_chan, struct sensor_data,
                  NULL, NULL,
-                 ZBUS_OBSERVERS(display_lis, logger_sub, alarm_sub),
+                 ZBUS_OBSERVERS(display_lis, consumer_sub),
                  ZBUS_MSG_INIT(.temperature_mc = 0,
                                .timestamp_ms = 0,
                                .seq = 0));
@@ -109,6 +106,7 @@ static void sensor_thread_fn(void *p1, void *p2, void *p3)
 
         int ret = zbus_chan_pub(&sensor_chan, &data, K_MSEC(100));
         if (ret != 0) {
+            /* Queue overflow */
             LOG_WRN("[SENSOR] publish failed ret=%d", ret);
         }
 
@@ -119,15 +117,15 @@ static void sensor_thread_fn(void *p1, void *p2, void *p3)
 }
 
 /* ================================================================== */
-/*  Message subscriber - logger                                       */
+/*  Message subscriber - consumer                                       */
 /* ================================================================== */
 
-static void logger_thread_fn(void *p1, void *p2, void *p3)
+static void consumer_thread_fn(void *p1, void *p2, void *p3)
 {
     ARG_UNUSED(p1); ARG_UNUSED(p2); ARG_UNUSED(p3);
 
-    int wdt_id = task_wdt_add(500, logger_wdt_cb, NULL);
-    k_thread_name_set(k_current_get(), "logger");
+    int wdt_id = task_wdt_add(1000, consumer_wdt_cb, NULL);
+    k_thread_name_set(k_current_get(), "consumer");
 
     const struct zbus_channel *chan;
     int received = 0;
@@ -139,80 +137,72 @@ static void logger_thread_fn(void *p1, void *p2, void *p3)
          * Message subscribers receive a copy of the published message.
          * The slow logger will not reread the latest channel value.
          */
-        int ret = zbus_sub_wait_msg(&logger_sub, &chan, &msg, K_MSEC(1500));
+        int ret = zbus_sub_wait(&consumer_sub, &chan, K_MSEC(1500));
         if (ret != 0) {
-            LOG_WRN("[LOGGER-MSG] timeout ret=%d", ret);
+            LOG_WRN("[CONSUMER-MSG] timeout ret=%d", ret);
             break;
+        }
+
+        ret = zbus_chan_read(chan, &msg, K_MSEC(100));
+        if (ret != 0) {
+            LOG_WRN("[CONSUMER] read failed ret=%d", ret);
+            continue;
         }
 
         received++;
 
-        LOG_INF("[LOGGER-MSG] thread=%s seq=%u temp=%d latency=%ums",
+        LOG_INF("[CONSUMER-MSG] thread=%s seq=%u temp=%d latency=%ums",
                 k_thread_name_get(k_current_get()),
                 msg.seq,
                 msg.temperature_mc,
                 k_uptime_get_32() - msg.timestamp_ms);
 
         /* Demonstrate stuck thread after receiving 10 messages */
-        if (received == 10) {
-            k_sleep(K_FOREVER);
-        }
+        // if (received == 30) {
+        //     k_sleep(K_FOREVER);
+        // }
 
         task_wdt_feed(wdt_id);
 
         /*
-         * Slow logger.
+         * Slow consumer.
          * Message copies let it process old samples safely.
          */
-        k_msleep(350);
+        k_msleep(250);
     }
 
     /* Delete the watchdog timer for this thread */
     task_wdt_delete(wdt_id);
 
-    LOG_INF("[LOGGER-MSG] done received=%d", received);
+    LOG_INF("[CONSUMER-MSG] done received=%d", received);
 }
 
 /* ================================================================== */
-/*  Subscriber - alarm                                                */
+/*  Subscriber - health-check thread                                  */
 /* ================================================================== */
-
-static void alarm_thread_fn(void *p1, void *p2, void *p3)
+static void health_thread_fn(void *p1, void *p2, void *p3)
 {
     ARG_UNUSED(p1); ARG_UNUSED(p2); ARG_UNUSED(p3);
 
-    k_thread_name_set(k_current_get(), "alarm");
+    k_thread_name_set(k_current_get(), "health-check");
 
-    const struct zbus_channel *chan;
-    int alarms = 0;
+    struct k_msgq *q = (struct k_msgq *)consumer_sub.queue;
+    bool warned = false;
 
     while (true) {
-        int ret = zbus_sub_wait(&alarm_sub, &chan, K_MSEC(3000));
-        if (ret != 0) {
-            LOG_INF("[ALARM-SUB] timeout, done");
-            break;
+        uint32_t used = k_msgq_num_used_get(q);
+        uint32_t capacity = k_msgq_num_free_get(q) + used;
+        uint8_t percent = (used * 100) / capacity;
+
+        if (percent >= QUEUE_WARN_PERCENT && !warned) {
+            LOG_WRN("[HEALTH] alarm queue %u/%u (%u%%)",
+                    used, capacity, percent);
+            warned = true;
+        } else if (percent < QUEUE_WARN_PERCENT) {
+            warned = false;
         }
 
-        struct sensor_data msg;
-
-        ret = zbus_chan_read(chan, &msg, K_MSEC(100));
-        if (ret != 0) {
-            LOG_WRN("[ALARM-SUB] read failed ret=%d", ret);
-            continue;
-        }
-
-        if (msg.temperature_mc >= TEMP_ALARM_MC) {
-            alarms++;
-
-            LOG_WRN("[ALARM-SUB] HIGH TEMP seq=%u temp=%d mC alarms=%d",
-                    msg.seq,
-                    msg.temperature_mc,
-                    alarms);
-        } else {
-            LOG_INF("[ALARM-SUB] ok seq=%u temp=%d mC",
-                    msg.seq,
-                    msg.temperature_mc);
-        }
+        k_msleep(HEALTH_PERIOD_MS);
     }
 }
 
@@ -223,11 +213,11 @@ static void alarm_thread_fn(void *p1, void *p2, void *p3)
 K_THREAD_DEFINE(sensor_thread, STACK_SIZE, sensor_thread_fn,
                 NULL, NULL, NULL, 5, 0, 0);
 
-K_THREAD_DEFINE(logger_thread, STACK_SIZE, logger_thread_fn,
+K_THREAD_DEFINE(consumer_thread, STACK_SIZE, consumer_thread_fn,
                 NULL, NULL, NULL, 6, 0, 0);
 
-// K_THREAD_DEFINE(alarm_thread, STACK_SIZE, alarm_thread_fn,
-//                 NULL, NULL, NULL, 6, 0, 0);
+K_THREAD_DEFINE(health_thread, STACK_SIZE, health_thread_fn,
+                NULL, NULL, NULL, 6, 0, 0);
 
 /* ================================================================== */
 /*  Main                                                              */
@@ -242,13 +232,11 @@ int main(void)
 		return 0;
 	}
     
+    k_sleep(K_MSEC(500));
+
     thread_analyzer_print(0);
-    LOG_INF("=== L4 Demo 2: Zbus Pub-Sub ===");
-    LOG_INF("sensor publishes every %dms", SENSOR_PERIOD_MS);
-    LOG_INF("display listener runs in publisher context");
-    LOG_INF("logger uses message subscriber copies");
-    LOG_INF("alarm uses a regular subscriber");
-    LOG_INF("alarm threshold: %d mC", TEMP_ALARM_MC);
+    LOG_INF("=== L5 Reliability under pressure ===");
+
 
     return 0;
 }
