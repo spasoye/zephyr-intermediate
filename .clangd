@@ -1,3 +1,4 @@
----
-InlayHints:
-  Enabled: true
+CompileFlags:
+  Add: ["-I/home/ivan/projects/zephyr_workbench/deps/zephyr/include"]
+Index:
+  Background: true
