@@ -1,4 +1,10 @@
 {
     "terminal.integrated.stickyScroll.enabled": false,
-    "cmake.sourceDirectory": "/home/ivan/projects/zephyr_workbench/iomico_intermediate/app",
+    "cmake.sourceDirectory": "${workspaceFolder}/nonexistent",
+    "zephyr-workbench.toolchain": "zephyr",
+    "zephyr-workbench.sdk": "/home/ivan/tools/zephyr_sdk/zephyr-sdk-1.0.1",
+    "zephyr-workbench.westWorkspace": "/home/ivan/projects/zephyr_workbench",
+    "cmake.ignoreCMakeListsMissing": true,
+    "cmake.configureOnOpen": false,
+    "cmake.enableAutomaticKitScan": false,
 }
