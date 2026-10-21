@@ -10,9 +10,12 @@ LOG_MODULE_REGISTER(homework, LOG_LEVEL_INF);
 #define EVENT_PERIOD_MS        250
 #define MAINTENANCE_LOAD_US  45000
 
+/* Response-time guarantee: control starts within 10 ms of the event */
+#define CONTROL_DEADLINE_US  10000
+
 struct control_event {
     uint32_t seq;
-    uint32_t ready_ms;
+    uint32_t ready_cyc;     /* hardware cycle counter when the event was queued */
 };
 
 K_MSGQ_DEFINE(control_queue, sizeof(struct control_event), 4, 4);
@@ -29,7 +32,7 @@ static void event_timer_expiry(struct k_timer *timer)
     static uint32_t seq;
     struct control_event event = {
         .seq = seq++,
-        .ready_ms = k_uptime_get_32(),
+        .ready_cyc = k_cycle_get_32(),
     };
 
     /* Timer expiry runs in interrupt context, so never wait here. */
@@ -54,9 +57,12 @@ K_TIMER_DEFINE(event_timer, event_timer_expiry, NULL);
 static void control_fn(void *p1, void *p2, void *p3)
 {
     ARG_UNUSED(p1); ARG_UNUSED(p2); ARG_UNUSED(p3);
+    uint32_t processed = 0;
+    uint32_t missed = 0;
 
     while (true) {
         struct control_event event;
+        
         int ret = k_msgq_get(&control_queue, &event, K_FOREVER);
 
         if (ret != 0) {
@@ -64,7 +70,16 @@ static void control_fn(void *p1, void *p2, void *p3)
             continue;
         }
 
-        LOG_INF("[CONTROL] processed seq=%u", event.seq);
+        uint32_t latency_ms = k_uptime_get_32() - event.ready_ms;
+        
+        processed++;
+        if (latency_ms > CONTROL_DEADLINE_MS) {
+            missed++;
+            LOG_WRN_RATELIMIT("[CONTROL] deadline missed for seq=%u latency=%u ms (missed %u/%u)", event.seq, latency_ms, missed, processed);
+        }
+        else{
+            LOG_INF_RATELIMIT("[CONTROL] deadline met for seq=%u (latency=%u ms)", event.seq, latency_ms);
+        }
 
         /* TODO: Define a response-time guarantee. */
         /* TODO: Measure latency and count every deadline miss. */
@@ -95,16 +110,6 @@ K_THREAD_DEFINE(control, STACK_SIZE, control_fn,
 K_THREAD_DEFINE(maintenance, STACK_SIZE, maintenance_fn,
                 NULL, NULL, NULL, MAINTENANCE_PRIORITY, 0, 0);
 
-K_THREAD_DEFINE(thread_low, STACK_SIZE, t_low_fn,
-                NULL, NULL, NULL, PRIO_LOW, 0, 0);
-
-K_THREAD_DEFINE(thread_med, STACK_SIZE, t_med_fn,
-                NULL, NULL, NULL, PRIO_MED, 0, 0);
-
-K_THREAD_DEFINE(thread_high, STACK_SIZE, t_high_fn,
-                NULL, NULL, NULL, PRIO_HIGH, 0, 0);
-
-                
 int main(void)
 {
     LOG_INF("=== L6 Homework: Runtime Investigation ===");
