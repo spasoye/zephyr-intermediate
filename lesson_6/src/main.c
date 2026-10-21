@@ -70,15 +70,16 @@ static void control_fn(void *p1, void *p2, void *p3)
             continue;
         }
 
-        uint32_t latency_ms = k_uptime_get_32() - event.ready_ms;
-        
+        /* Unsigned subtraction stays correct across cycle counter wrap-around */
+        uint32_t latency_us = k_cyc_to_us_floor32(k_cycle_get_32() - event.ready_cyc);
+
         processed++;
-        if (latency_ms > CONTROL_DEADLINE_MS) {
+        if (latency_us > CONTROL_DEADLINE_US) {
             missed++;
-            LOG_WRN_RATELIMIT("[CONTROL] deadline missed for seq=%u latency=%u ms (missed %u/%u)", event.seq, latency_ms, missed, processed);
+            LOG_WRN_RATELIMIT("[CONTROL] deadline missed for seq=%u latency=%u us (missed %u/%u)", event.seq, latency_us, missed, processed);
         }
         else{
-            LOG_INF_RATELIMIT("[CONTROL] deadline met for seq=%u (latency=%u ms)", event.seq, latency_ms);
+            LOG_INF_RATELIMIT("[CONTROL] deadline met for seq=%u (latency=%u us)", event.seq, latency_us);
         }
 
         /* TODO: Define a response-time guarantee. */
