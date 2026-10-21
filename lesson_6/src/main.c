@@ -46,6 +46,7 @@ static void event_timer_expiry(struct k_timer *timer)
     k_sem_give(&maintenance_start);
 
     /* TODO: Add an application trace event for this sequence. */
+    sys_trace_named_event("control_event", event.seq, 0);
 }
 
 K_TIMER_DEFINE(event_timer, event_timer_expiry, NULL);
@@ -82,6 +83,7 @@ static void control_fn(void *p1, void *p2, void *p3)
             LOG_INF_RATELIMIT("[CONTROL] deadline met for seq=%u (latency=%u us)", event.seq, latency_us);
         }
 
+        sys_trace_named_event("control_done", event.seq, latency_us);
         /* TODO: Define a response-time guarantee. */
         /* TODO: Measure latency and count every deadline miss. */
         /* TODO: Rate-limit repeated warning messages. */
