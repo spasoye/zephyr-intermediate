@@ -1,0 +1,18 @@
+/*
+ * ESP32-S3-DevKitC (procpu) overlay for lesson_6.
+ *
+ * Console + shell stay on uart0 ("UART" USB port, CP210x -> /dev/ttyUSB*).
+ * CTF tracing goes to the built-in USB Serial/JTAG controller ("USB" port,
+ * /dev/ttyACM*), the same cable used for JTAG debugging; both work at once.
+ */
+
+/ {
+    chosen {
+        zephyr,tracing-uart = &usb_serial;
+	    zephyr,console = &uart0;
+    };
+};
+
+&usb_serial {
+    status = "okay";
+};
