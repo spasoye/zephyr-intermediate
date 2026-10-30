@@ -1,0 +1,2 @@
+/home/ivan/projects/zephyr_workbench/iomico_intermediate/lesson_8/twister-out/native_sim_native/host_gnu/iomico_intermediate/lesson_8/tests/temp_alarm/homework.unit.temp_alarm/zephyr/NSI/common/src/nsi_host_trampolines.o: \
+ /home/ivan/projects/zephyr_workbench/deps/zephyr/scripts/native_simulator//common/src/nsi_host_trampolines.c
